@@ -36,10 +36,38 @@ type Lefthook struct {
 	fs     afero.Fs
 	repo   *git.Repository
 	colors string
+	noGit  bool
 }
 
 // NewLefthook returns an instance of Lefthook.
 func NewLefthook(verbose bool, colors string) (*Lefthook, error) {
+	fs, colors := initLefthook(verbose, colors)
+
+	repo, err := git.NewRepository(fs, git.NewExecutor(system.Cmd))
+	if err != nil {
+		return nil, err
+	}
+
+	return &Lefthook{fs: fs, repo: repo, colors: colors}, nil
+}
+
+// NewLefthookNoGit returns an instance of Lefthook that works without a git repository.
+// It uses the current working directory as the root path.
+func NewLefthookNoGit(verbose bool, colors string) (*Lefthook, error) {
+	fs, colors := initLefthook(verbose, colors)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current working directory: %w", err)
+	}
+
+	repo := git.NewNoGitRepository(fs, git.NewExecutor(system.Cmd), cwd)
+
+	return &Lefthook{fs: fs, repo: repo, colors: colors, noGit: true}, nil
+}
+
+// initLefthook sets up common options for both NewLefthook and NewLefthookNoGit.
+func initLefthook(verbose bool, colors string) (afero.Fs, string) {
 	fs := afero.NewOsFs()
 
 	if isEnvEnabled(EnvVerbose) {
@@ -67,12 +95,7 @@ func NewLefthook(verbose bool, colors string) (*Lefthook, error) {
 
 	log.SetColors(colors)
 
-	repo, err := git.NewRepository(fs, git.NewExecutor(system.Cmd))
-	if err != nil {
-		return nil, err
-	}
-
-	return &Lefthook{fs: fs, repo: repo, colors: colors}, nil
+	return fs, colors
 }
 
 func (l *Lefthook) LoadConfig() (*config.Config, error) {

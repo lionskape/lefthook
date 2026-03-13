@@ -104,7 +104,11 @@ func run() *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			l, err := command.NewLefthook(args.Verbose, colors)
 			if err != nil {
-				return err
+				// Fall back to no-git mode when the git repository is unavailable.
+				l, err = command.NewLefthookNoGit(args.Verbose, colors)
+				if err != nil {
+					return err
+				}
 			}
 
 			if failOnChanges.IsSet() {

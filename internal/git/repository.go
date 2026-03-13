@@ -64,6 +64,11 @@ type Repository struct {
 	unstagedPatchPath string
 	headBranch        string
 
+	// NoGit indicates that this repository is not backed by a git installation.
+	// When true, git-dependent functions (StagedFiles, AllFiles, PushFiles) return
+	// empty results rather than calling git.
+	NoGit bool
+
 	stagedFilesOnce            func() ([]string, error)
 	stagedFilesWithDeletedOnce func() ([]string, error)
 	statusShortOnce            func() ([]string, error)
@@ -118,10 +123,30 @@ func NewRepository(fs afero.Fs, git *CommandExecutor) (*Repository, error) {
 	return r, nil
 }
 
+// NewNoGitRepository creates a Repository without a git installation.
+// It uses the provided working directory as the root path.
+// Git-dependent functions (StagedFiles, AllFiles, PushFiles) will return empty results.
+func NewNoGitRepository(fs afero.Fs, git *CommandExecutor, cwd string) *Repository {
+	git.root = cwd
+
+	r := &Repository{
+		Fs:       fs,
+		Git:      git,
+		RootPath: cwd,
+		NoGit:    true,
+	}
+	r.Setup()
+	return r
+}
+
 // Precompute runs various Git commands in the background so the results are ready.
 // This returns a function which can be used to wait for the result. This should
 // be invoked to ensure we're not holding any locks on the Git repository.
 func (r *Repository) Precompute() func() {
+	if r.NoGit {
+		return func() {}
+	}
+
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
@@ -164,22 +189,39 @@ func (r *Repository) Setup() {
 }
 
 // StagedFiles returns a list of staged files which exist on file system.
+// Returns an empty list when the repository has no git (NoGit is true).
 func (r *Repository) StagedFiles() ([]string, error) {
+	if r.NoGit {
+		return nil, nil
+	}
 	return r.stagedFilesOnce()
 }
 
 // StagedFilesWithDeleted returns a list of staged files with deleted files.
+// Returns an empty list when the repository has no git (NoGit is true).
 func (r *Repository) StagedFilesWithDeleted() ([]string, error) {
+	if r.NoGit {
+		return nil, nil
+	}
 	return r.stagedFilesWithDeletedOnce()
 }
 
 // AllFiles returns a list of all files in repository.
+// Returns an empty list when the repository has no git (NoGit is true).
 func (r *Repository) AllFiles() ([]string, error) {
+	if r.NoGit {
+		return nil, nil
+	}
 	return r.FindExistingFiles(cmdAllFiles, "")
 }
 
 // PushFiles returns a list of files that are ready to be pushed.
+// Returns an empty list when the repository has no git (NoGit is true).
 func (r *Repository) PushFiles() ([]string, error) {
+	if r.NoGit {
+		return nil, nil
+	}
+
 	// Try with @{push}
 	lines, err := r.Git.OnlyDebugLogs().CmdLinesWithinFolder(cmdPushFilesBase, "")
 	if err == nil {

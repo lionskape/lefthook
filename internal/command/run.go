@@ -90,7 +90,7 @@ func (l *Lefthook) Run(ctx context.Context, args RunArgs) error {
 		log.LogMeta(args.Hook)
 	}
 
-	if !args.NoAutoInstall && !cfg.NoAutoInstall {
+	if !args.NoAutoInstall && !cfg.NoAutoInstall && !l.noGit {
 		// This line controls updating the git hook if config has changed
 		var newCfg *config.Config
 		newCfg, err = l.syncHooks(cfg, !isGhostHook)
@@ -131,6 +131,12 @@ func (l *Lefthook) Run(ctx context.Context, args RunArgs) error {
 	hook.Jobs = append(hook.Jobs, config.ScriptsToJobs(hook.Scripts)...)
 	hook.Scripts = nil
 	args.RunOnlyJobs = append(args.RunOnlyJobs, args.RunOnlyCommands...)
+
+	if l.noGit {
+		if err := validateNoGitJobs(hook.Files, hook.Jobs); err != nil {
+			return err
+		}
+	}
 
 	return runHook(ctx, hook, l.repo, run.Options{
 		DisableTTY:        cfg.NoTTY || args.NoTTY,
@@ -175,6 +181,9 @@ func getFiles(repo *git.Repository, args RunArgs) ([]string, error) {
 		}
 		return append(args.Files, parseFilesFromString(string(paths))...), nil
 	} else if args.AllFiles {
+		if repo.NoGit {
+			return nil, errors.New("--all-files requires a git repository")
+		}
 		files, err := repo.AllFiles()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get all files: %w", err)
@@ -183,6 +192,35 @@ func getFiles(repo *git.Repository, args RunArgs) ([]string, error) {
 	}
 
 	return args.Files, nil
+}
+
+// validateNoGitJobs checks that every leaf job (run or script) has a 'files' configuration
+// when running outside a git repository. The check considers files inherited from parent
+// hooks or groups.
+func validateNoGitJobs(inheritedFilesCmd string, jobs []*config.Job) error {
+	for _, job := range jobs {
+		effectiveFilesCmd := job.Files
+		if len(effectiveFilesCmd) == 0 {
+			effectiveFilesCmd = inheritedFilesCmd
+		}
+
+		if job.Group != nil {
+			if err := validateNoGitJobs(effectiveFilesCmd, job.Group.Jobs); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if len(job.Run) == 0 && len(job.Script) == 0 {
+			continue
+		}
+
+		if len(effectiveFilesCmd) == 0 {
+			return fmt.Errorf("job %q requires a 'files' setting when running outside a git repository", job.PrintableName("?"))
+		}
+	}
+
+	return nil
 }
 
 func getSourceDirs(repo *git.Repository, cfg *config.Config) []string {
