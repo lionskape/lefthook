@@ -163,3 +163,114 @@ post-commit:
 		})
 	}
 }
+
+func TestRunNoGit(t *testing.T) {
+	root, err := filepath.Abs("src")
+	if err != nil {
+		t.Errorf("unexpected error: %s", err)
+	}
+
+	configPath := filepath.Join(root, "lefthook.yml")
+
+	for i, tt := range [...]struct {
+		name, hook, config string
+		error              bool
+	}{
+		{
+			name: "No git: job with files - valid",
+			hook: "lint",
+			config: `
+lint:
+  commands:
+    check:
+      files: echo file.go
+      run: echo {files}
+`,
+			error: false,
+		},
+		{
+			name: "No git: job without files - invalid",
+			hook: "lint",
+			config: `
+lint:
+  commands:
+    check:
+      run: echo hello
+`,
+			error: true,
+		},
+		{
+			name: "No git: hook-level files inherited by job - valid",
+			hook: "lint",
+			config: `
+lint:
+  files: echo file.go
+  commands:
+    check:
+      run: echo {files}
+`,
+			error: false,
+		},
+		{
+			name: "No git: job in group with files - valid",
+			hook: "lint",
+			config: `
+lint:
+  jobs:
+    - group:
+        jobs:
+          - name: check
+            run: echo {files}
+            files: echo file.go
+`,
+			error: false,
+		},
+		{
+			name: "No git: job in group without files - invalid",
+			hook: "lint",
+			config: `
+lint:
+  jobs:
+    - group:
+        jobs:
+          - name: check
+            run: echo hello
+`,
+			error: true,
+		},
+		{
+			name: "No git: group-level files inherited by sub-job - valid",
+			hook: "lint",
+			config: `
+lint:
+  jobs:
+    - files: echo file.go
+      group:
+        jobs:
+          - name: check
+            run: echo {files}
+`,
+			error: false,
+		},
+	} {
+		t.Run(fmt.Sprintf("%d: %s", i, tt.name), func(t *testing.T) {
+			assert := assert.New(t)
+			fs := afero.NewMemMapFs()
+			lefthook := &Lefthook{
+				fs:    fs,
+				repo:  gittest.NewRepositoryBuilder().Cmd(cmdtest.NewDumb()).Fs(fs).Root(root).Build(),
+				noGit: true,
+			}
+			lefthook.repo.Setup()
+
+			assert.NoError(afero.WriteFile(fs, configPath, []byte(tt.config), 0o644))
+
+			err = lefthook.Run(t.Context(), RunArgs{Hook: tt.hook})
+			if tt.error {
+				assert.Error(err)
+			} else {
+				assert.NoError(err)
+			}
+		})
+	}
+}
